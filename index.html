@@ -1,0 +1,361 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>五戸町双六ゲーム</title>
+    <style>
+        body { margin: 0; overflow: hidden; }
+        canvas { display: block; }
+        #info {
+            position: absolute;
+            top: 10px;
+            left: 10px;
+            color: white;
+            font-family: Arial, sans-serif;
+            font-size: 16px;
+        }
+        #diceButton {
+            position: absolute;
+            bottom: 20px;
+            left: 20px;
+            padding: 10px 20px;
+            font-size: 18px;
+        }
+        #infoPanel {
+            position: absolute;
+            top: 50px;
+            left: 10px;
+            background-color: rgba(255, 255, 255, 0.8);
+            padding: 10px;
+            border-radius: 5px;
+            display: none;
+        }
+        #infoPanel button {
+            margin: 5px;
+            padding: 5px 10px;
+        }
+        #audioControls {
+            position: absolute;
+            top: 10px;
+            right: 10px;
+        }
+        #audioControls button {
+            margin-left: 10px;
+            padding: 5px 10px;
+            font-size: 16px;
+            cursor: pointer;
+        }
+    </style>
+</head>
+<body>
+    <div id="info">五戸町双六ゲーム</div>
+    <button id="diceButton">サイコロをる</button>
+    <div id="audioControls">
+        <button id="bgmButton">🎵 BGMオン</button>
+        <button id="sfxButton">🔊 効果音オン</button>
+    </div>
+    <div id="infoPanel"></div>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/loaders/GLTFLoader.js"></script>
+    <script>
+        const scene = new THREE.Scene();
+        const camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 0.1, 1000);
+        camera.position.set(0, 2, 5); // キャラクターの背後に配置
+        camera.lookAt(0, 0, 0);
+        const renderer = new THREE.WebGLRenderer();
+        renderer.setSize(window.innerWidth, window.innerHeight);
+        document.body.appendChild(renderer.domElement);
+
+        // ライトの追加
+        const ambientLight = new THREE.AmbientLight(0xffffff, 0.5);
+        scene.add(ambientLight);
+
+        const directionalLight = new THREE.DirectionalLight(0xffffff, 0.8);
+        directionalLight.position.set(5, 10, 5);
+        scene.add(directionalLight);
+
+        // フィールドの作成
+        const fieldGeometry = new THREE.PlaneGeometry(60, 60);
+        const fieldMaterial = new THREE.MeshStandardMaterial({ color: 0x90EE90 });
+        const field = new THREE.Mesh(fieldGeometry, fieldMaterial);
+        field.rotation.x = -Math.PI / 2;
+        scene.add(field);
+
+        // マス目の作成
+        const squares = [];
+        for (let i = 0; i < 9; i++) {
+            const squareGeometry = new THREE.BoxGeometry(5, 0.1, 5);
+            const squareMaterial = new THREE.MeshStandardMaterial({ color: 0xFFFFFF });
+            const square = new THREE.Mesh(squareGeometry, squareMaterial);
+            square.position.set(-25 + i * 6, 0.05, -25);
+            scene.add(square);
+            squares.push(square);
+        }
+
+        // キャラクターの初期位置
+        const startPosition = new THREE.Vector3(-25, 0.5, -25);
+
+        // キャラクターの設定
+        let character;
+        let waitingModel, runningModel;
+        let waitingMixer, runningMixer;
+        let waitingAction, runningAction;
+        const loader = new THREE.GLTFLoader();
+
+        loader.load('待機うま.glb', (gltf) => {
+            waitingModel = gltf.scene;
+            waitingModel.scale.set(1.2, 1.2, 1.2); // スケールを1.5から1.2に縮小
+            waitingModel.position.copy(startPosition);
+            character = waitingModel;
+            scene.add(character);
+
+            waitingMixer = new THREE.AnimationMixer(waitingModel);
+            const waitingClip = gltf.animations[0];
+            waitingAction = waitingMixer.clipAction(waitingClip);
+            waitingAction.play();
+        });
+
+        loader.load('走るウマ.glb', (gltf) => {
+            runningModel = gltf.scene;
+            runningModel.scale.set(1.2, 1.2, 1.2); // スケールを1.5から1.2に縮小
+            runningModel.visible = false;
+            scene.add(runningModel);
+
+            runningMixer = new THREE.AnimationMixer(runningModel);
+            const runningClip = gltf.animations[0];
+            runningAction = runningMixer.clipAction(runningClip);
+        });
+
+        // サイコロの作成
+        const diceGeometry = new THREE.BoxGeometry(2, 2, 2);
+        const diceMaterials = [
+            new THREE.MeshStandardMaterial({ color: 0xFFFFFF }),
+            new THREE.MeshStandardMaterial({ color: 0xFFFFFF }),
+            new THREE.MeshStandardMaterial({ color: 0xFFFFFF }),
+            new THREE.MeshStandardMaterial({ color: 0xFFFFFF }),
+            new THREE.MeshStandardMaterial({ color: 0xFFFFFF }),
+            new THREE.MeshStandardMaterial({ color: 0xFFFFFF })
+        ];
+        const dice = new THREE.Mesh(diceGeometry, diceMaterials);
+        dice.position.set(15, 5, 15);
+        scene.add(dice);
+
+        let currentSquare = 0;
+
+        function rollDice() {
+            return Math.floor(Math.random() * 6) + 1;
+        }
+
+        // クイズデータ
+        const quizzes = [
+            {
+                question: "五戸町の名産品は何でしょう？",
+                options: ["りんご", "にんにく", "さくらん"],
+                correctAnswer: 1
+            },
+            {
+                question: "五戸町にある有名な温泉の名前は？",
+                options: ["浅水温泉", "五戸温泉", "倉石温泉"],
+                correctAnswer: 0
+            },
+            // 他のクイズを追加...
+        ];
+
+        let currentQuiz;
+
+        function showQuiz() {
+            currentQuiz = Math.floor(Math.random() * quizzes.length);
+            const quiz = quizzes[currentQuiz];
+            const infoPanel = document.getElementById('infoPanel');
+            infoPanel.innerHTML = `
+                <h3>${quiz.question}</h3>
+                ${quiz.options.map((option, index) => `
+                    <button onclick="answerQuiz(${index})">${option}</button>
+                `).join('')}
+            `;
+            infoPanel.style.display = 'block';
+        }
+
+        // グローバルスコープで関数を定義
+        window.answerQuiz = function(selectedAnswer) {
+            const quiz = quizzes[currentQuiz];
+            const infoPanel = document.getElementById('infoPanel');
+            if (selectedAnswer === quiz.correctAnswer) {
+                infoPanel.innerHTML = "<p>正解です！進行を続けます。</p>";
+                setTimeout(() => {
+                    infoPanel.style.display = 'none';
+                }, 2000);
+            } else {
+                infoPanel.innerHTML = "<p>不正解です。ゲームを最初からやり直します。</p>";
+                setTimeout(() => {
+                    location.reload(); // ページをリロード
+                }, 2000);
+            }
+        };
+
+        function moveCharacter(steps) {
+            switchToRunningModel();
+
+            // 足音効果音を再生（BGMがオンの場合のみ）
+            if (!bgm.paused) {
+                footstepSound.play();
+            }
+
+            currentSquare += steps;
+            if (currentSquare >= squares.length) {
+                currentSquare = squares.length - 1;
+            }
+            const targetPosition = squares[currentSquare].position.clone();
+            targetPosition.y = 0.5;
+            
+            const duration = 1500 * steps;
+            const startPosition = character.position.clone();
+            const startTime = Date.now();
+
+            function animateMove() {
+                const currentTime = Date.now();
+                const elapsedTime = currentTime - startTime;
+                const progress = Math.min(elapsedTime / duration, 1);
+
+                character.position.lerpVectors(startPosition, targetPosition, progress);
+
+                const direction = new THREE.Vector3().subVectors(targetPosition, startPosition).normalize();
+                character.lookAt(character.position.clone().add(direction));
+
+                camera.position.copy(character.position).add(new THREE.Vector3(0, 2, 5));
+                camera.lookAt(character.position);
+
+                if (progress < 1) {
+                    requestAnimationFrame(animateMove);
+                } else {
+                    switchToWaitingModel();
+                    // 移動が終わったら足音を停止
+                    footstepSound.pause();
+                    footstepSound.currentTime = 0;
+                    showQuiz();
+                }
+            }
+
+            animateMove();
+        }
+
+        function switchToRunningModel() {
+            if (character === waitingModel) {
+                waitingModel.visible = false;
+                runningModel.position.copy(waitingModel.position);
+                runningModel.rotation.copy(waitingModel.rotation);
+                runningModel.visible = true;
+                character = runningModel;
+                waitingAction.stop();
+                runningAction.play();
+            }
+        }
+
+        function switchToWaitingModel() {
+            if (character === runningModel) {
+                runningModel.visible = false;
+                waitingModel.position.copy(runningModel.position);
+                waitingModel.rotation.copy(runningModel.rotation);
+                waitingModel.visible = true;
+                character = waitingModel;
+                runningAction.stop();
+                waitingAction.play();
+            }
+        }
+
+        document.getElementById('diceButton').addEventListener('click', () => {
+            const result = rollDice();
+            const infoPanel = document.getElementById('infoPanel');
+            infoPanel.textContent = `サイコロの目: ${result}`;
+            infoPanel.style.display = 'block';
+
+            // サイコロのアニメーション
+            dice.rotation.set(
+                Math.random() * Math.PI,
+                Math.random() * Math.PI,
+                Math.random() * Math.PI
+            );
+
+            // 1秒後にキャラクターを移動
+            setTimeout(() => {
+                moveCharacter(result);
+            }, 1000);
+        });
+
+        function animate() {
+            requestAnimationFrame(animate);
+
+            const deltaTime = clock.getDelta();
+            if (waitingMixer) waitingMixer.update(deltaTime);
+            if (runningMixer) runningMixer.update(deltaTime);
+
+            // カメラの位置を常に更新
+            if (character) {
+                camera.position.copy(character.position).add(new THREE.Vector3(0, 2, 5));
+                camera.lookAt(character.position);
+            }
+
+            renderer.render(scene, camera);
+        }
+
+        const clock = new THREE.Clock();
+        animate();
+
+        window.addEventListener('resize', () => {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        });
+
+        // BGM用のAudio要素を作成
+        const bgm = new Audio('うま冒険.mp3');
+        bgm.loop = true; // ループ再生を有効にする
+
+        // 足音効果音用のAudio要素を作成
+        const footstepSound = new Audio('足音.mp3');
+        footstepSound.loop = true;
+        footstepSound.volume = 1.0; // 音量を最大に設定
+
+        let isBgmOn = true;
+        let isSfxOn = true;
+
+        function toggleBgm() {
+            const bgmButton = document.getElementById('bgmButton');
+            if (isBgmOn) {
+                bgm.pause();
+                bgmButton.textContent = '🔇 BGMオフ';
+                isBgmOn = false;
+            } else {
+                bgm.play();
+                bgmButton.textContent = '🎵 BGMオン';
+                isBgmOn = true;
+            }
+        }
+
+        function toggleSfx() {
+            const sfxButton = document.getElementById('sfxButton');
+            if (isSfxOn) {
+                footstepSound.pause();
+                sfxButton.textContent = '🔇 効果音オフ';
+                isSfxOn = false;
+            } else {
+                sfxButton.textContent = '🔊 効果音オン';
+                isSfxOn = true;
+            }
+        }
+
+        document.getElementById('bgmButton').addEventListener('click', toggleBgm);
+        document.getElementById('sfxButton').addEventListener('click', toggleSfx);
+
+        // ページ読み込み時にBGMを再生開始
+        window.addEventListener('load', () => {
+            bgm.play().catch(error => {
+                console.log('自動再生できませんでした:', error);
+                document.getElementById('bgmButton').textContent = '🔇 BGMオフ';
+                isBgmOn = false;
+            });
+        });
+    </script>
+</body>
+</html>
